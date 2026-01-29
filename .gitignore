@@ -1,0 +1,77 @@
+# Build results
+**/bin/
+**/obj/
+**/out/
+**/AppPackages/
+**/BundleArtifacts/
+**/PublishProfiles/
+
+# User-specific files
+*.user
+*.userosscache
+*.suo
+*.userprefs
+*.csproj.user
+.vs/
+.vscode/
+
+# Logs
+*.log
+*.tlog
+TestResult*/
+*.coverage
+*.coveragexml
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/
+**/packages/*
+**/PackageTmp/
+project.lock.json
+artifacts/
+
+# Cache
+**/.idea/
+**/.ionide/
+**/.vsconfig
+**/obj/Debug/
+**/obj/Release/
+**/.vs/**
+**/.cache/
+**/node_modules/
+
+# Dotnet tooling
+*.deps.json
+*.runtimeconfig.json
+*.dbmdl
+*.mdf
+*.ldf
+
+# Resharper
+*_ReSharper*/
+*.DotSettings.user
+
+# Rider
+.idea/
+*.sln.iml
+
+# Azure
+*.publishsettings
+*.pubxml
+*.pubxml.user
+
+# Others
+*.psess
+*.vsp
+*.vspx
+*.pidb
+*.svclog
+*.pdb
+*.DS_Store
+
+# Secrets (keep local)
+*.key
+*.pfx
+*.cer
+.env
