@@ -1,103 +1,124 @@
-using System.ComponentModel;
 using System.Text;
 using System.Text.RegularExpressions;
 using GitHub.Copilot.SDK;
+using GithubCopilotAgent.CLI.Infrastructure;
 using Microsoft.Agents.AI.GitHub.Copilot;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Extensions.AI;
 
+var dryRun = args.Contains("--dry-run", StringComparer.OrdinalIgnoreCase);
+var goalArg = args.FirstOrDefault(a => !a.StartsWith("--", StringComparison.OrdinalIgnoreCase));
+var constraintsArg = string.Join(' ', args.Where(a => a.StartsWith("--constraints=", StringComparison.OrdinalIgnoreCase))
+    .Select(a => a[("--constraints=".Length)..]));
+
+var goal = string.IsNullOrWhiteSpace(goalArg)
+    ? Prompt("Goal: ")
+    : goalArg.Trim();
+
+var constraints = string.IsNullOrWhiteSpace(constraintsArg)
+    ? Prompt("Constraints (optional): ")
+    : constraintsArg.Trim();
+
+var workspaceRoot = Directory.GetCurrentDirectory();
+var fileSystem = new DiskFileSystem(workspaceRoot, dryRun);
+var (readFileTool, writeFileTool, deleteFileTool, listFilesTool) = FileSystemTools.Create(fileSystem);
+var testRunnerTool = FileSystemTools.CreateTestRunner(workspaceRoot);
+
 await using var copilotClient = new CopilotClient();
 await copilotClient.StartAsync();
 
-var docOutlineTool = AIFunctionFactory.Create(
-    ([Description("Topic to document")] string topic,
-     [Description("Primary audience, e.g., 'API consumer' or 'maintainer'")] string audience) =>
-    {
-        return $"""
-# {topic} Documentation
-
-## Summary
-- Purpose and scope
-- Target audience: {audience}
-
-## Architecture
-- Key components
-- Data flow and boundaries
-- Dependencies and configuration
-
-## Usage
-- Setup prerequisites
-- Run/build commands
-- Key API surface with examples
-
-## Observability
-- Logging and metrics hooks
-- Health/readiness considerations
-
-## Security
-- Inputs/validation
-- Secrets/config handling
-
-## Future Work
-- Gaps and next steps
-""";
-    },
-    name: "draft_outline",
-    description: "Provide a structured Markdown outline for .NET app documentation."
-);
-
-var docWriterAgent = new GitHubCopilotAgent(
+var planningAgent = new GitHubCopilotAgent(
     copilotClient,
-    instructions: "You are a concise technical writer for .NET 10 solutions. Produce full Markdown docs that explain architecture, design decisions, and usage with .NET specifics. First call the draft_outline tool to plan, then produce the final doc. Keep answers focused and actionable.",
-    name: "doc-writer",
-    tools: [docOutlineTool]);
+    instructions: "You are the PlanningAgent. Break the user goal into 4-8 ordered steps with acceptance criteria. Always return a concise plan first before any execution.",
+    name: "plan-agent");
+
+var executionAgent = new GitHubCopilotAgent(
+    copilotClient,
+    instructions: "You are the ExecutionAgent. Take the plan and perform each step by editing files. Use the provided tools to read/write/list/delete files. Keep changes atomic, respect constraints, and annotate what you changed.",
+    name: "exec-agent",
+    tools: [readFileTool, writeFileTool, deleteFileTool, listFilesTool]);
 
 var reviewAgent = new GitHubCopilotAgent(
     copilotClient,
-    instructions: "You are a thoughtful reviewer. Critique the previous assistant message for clarity, completeness, and .NET correctness. Respond in Markdown with a short list of improvements.",
-    name: "doc-reviewer");
+    instructions: "You are the ReviewAgent. Inspect the plan and execution output. Identify correctness, quality, and safety issues with concrete file references and fixes.",
+    name: "review-agent",
+    tools: [readFileTool, listFilesTool]);
 
-var docWorkflow = AgentWorkflowBuilder.BuildSequential([docWriterAgent, reviewAgent]);
+var testingAgent = new GitHubCopilotAgent(
+    copilotClient,
+    instructions: "You are the TestingAgent. Propose and run tests. Prefer dotnet test. Summarize results and failures succinctly.",
+    name: "test-agent",
+    tools: [readFileTool, listFilesTool, testRunnerTool]);
 
-Console.WriteLine("📝  .NET Documentation assistant (type 'exit' to quit)");
-Console.WriteLine("   Enter a topic to generate documentation and an automatic review. Examples:");
-Console.WriteLine("   - API docs for OrdersController");
-Console.WriteLine("   - Architecture overview for CQRS layer\n");
+var documentationAgent = new GitHubCopilotAgent(
+    copilotClient,
+    instructions: "You are the DocumentationAgent. Update or create docs (README, usage) reflecting the implemented goal. Keep docs concise and actionable.",
+    name: "docs-agent",
+    tools: [readFileTool, writeFileTool, listFilesTool]);
 
-while (true)
+var workflow = AgentWorkflowBuilder.BuildSequential([
+    planningAgent,
+    executionAgent,
+    reviewAgent,
+    testingAgent,
+    documentationAgent
+]);
+
+Console.WriteLine("🤖 Copilot multi-agent CLI (type 'exit' to quit)");
+Console.WriteLine($"Workspace: {workspaceRoot}");
+Console.WriteLine(dryRun ? "Running in dry-run mode (no writes)." : "Live mode (file writes enabled).");
+
+while (!string.Equals(goal, "exit", StringComparison.OrdinalIgnoreCase))
 {
-    Console.Write("Topic: ");
-    var input = Console.ReadLine();
-
-    if (string.IsNullOrEmpty(input) || input.Equals("exit", StringComparison.OrdinalIgnoreCase))
+    if (string.IsNullOrWhiteSpace(goal))
     {
-        break;
-    }
-
-    var topic = input.Trim();
-    if (string.IsNullOrWhiteSpace(topic))
-    {
-        Console.WriteLine("Assistant: Please provide a documentation topic.");
+        goal = Prompt("Goal: ");
         continue;
     }
 
-    Console.WriteLine($"Assistant ({docWriterAgent.Name} -> {reviewAgent.Name}): running workflow for '{topic}'...\n");
+    var input = BuildPrompt(goal, constraints, dryRun);
+    Console.WriteLine($"\nExecuting workflow for: {goal}\n");
 
-    var combined = await RunWorkflowAsync(docWorkflow, topic);
+    var combined = await RunWorkflowAsync(workflow, input);
 
-    if (string.IsNullOrWhiteSpace(combined))
+    if (!string.IsNullOrWhiteSpace(combined))
+    {
+        var path = SaveRun(goal, combined);
+        Console.WriteLine($"Saved conversation to {path}\n");
+    }
+    else
     {
         Console.WriteLine("No content was generated. Check Copilot credentials/config and try again.\n");
-        continue;
     }
 
-    var path = SaveDocument(topic, combined);
-    Console.WriteLine($"\nSaved to {path}\n");
+    goal = Prompt("Goal (or 'exit'): ");
+    constraints = Prompt("Constraints (optional): ");
 }
 
-static async Task<string> RunWorkflowAsync(Workflow workflow, string topic)
+static string Prompt(string label)
 {
-    await using var run = await InProcessExecution.StreamAsync(workflow, input: topic);
+    Console.Write(label);
+    return Console.ReadLine() ?? string.Empty;
+}
+
+static string BuildPrompt(string goal, string constraints, bool dryRun)
+{
+    var sb = new StringBuilder();
+    sb.AppendLine($"Goal: {goal}");
+    if (!string.IsNullOrWhiteSpace(constraints))
+    {
+        sb.AppendLine($"Constraints: {constraints}");
+    }
+
+    sb.AppendLine("Context: You are operating on the local workspace. Use tools to read/write/list/delete files. Keep outputs concise.");
+    sb.AppendLine(dryRun ? "Dry-run: do not persist writes; describe intended changes." : "Live mode: writes allowed. Be careful.");
+    sb.AppendLine("Finish with a short summary and next steps.");
+    return sb.ToString();
+}
+
+static async Task<string> RunWorkflowAsync(Workflow workflow, string input)
+{
+    await using var run = await InProcessExecution.StreamAsync(workflow, input: input);
     await run.TrySendMessageAsync(new TurnToken(emitEvents: true));
 
     var buffer = new StringBuilder();
@@ -126,15 +147,15 @@ static async Task<string> RunWorkflowAsync(Workflow workflow, string topic)
     return buffer.ToString();
 }
 
-static string SaveDocument(string topic, string content)
+static string SaveRun(string goal, string content)
 {
-    var docsDir = Path.Combine(AppContext.BaseDirectory, "docs");
+    var docsDir = Path.Combine(AppContext.BaseDirectory, "runs");
     Directory.CreateDirectory(docsDir);
 
-    var slug = Regex.Replace(topic.ToLowerInvariant(), "[^a-z0-9]+", "-").Trim('-');
+    var slug = Regex.Replace(goal.ToLowerInvariant(), "[^a-z0-9]+", "-").Trim('-');
     if (string.IsNullOrWhiteSpace(slug))
     {
-        slug = "doc";
+        slug = "goal";
     }
 
     var fileName = $"{slug}-{DateTime.UtcNow:yyyyMMdd-HHmmss}.md";
