@@ -121,10 +121,13 @@ static async Task<string> RunWorkflowAsync(Workflow workflow, string input)
     await using var run = await InProcessExecution.StreamAsync(workflow, input: input);
     await run.TrySendMessageAsync(new TurnToken(emitEvents: true));
 
+    using var spinner = StartSpinner("Working");
     var buffer = new StringBuilder();
 
     await foreach (var evt in run.WatchStreamAsync())
     {
+        spinner.Ping();
+
         switch (evt)
         {
             case AgentResponseUpdateEvent update when !string.IsNullOrEmpty(update.Update?.Text):
@@ -139,6 +142,10 @@ static async Task<string> RunWorkflowAsync(Workflow workflow, string input)
 
             case WorkflowErrorEvent error:
                 Console.WriteLine($"[workflow error] {error}");
+                break;
+
+            default:
+                Console.WriteLine($"[event] {evt.GetType().Name}");
                 break;
         }
     }
@@ -164,3 +171,5 @@ static string SaveRun(string goal, string content)
     File.WriteAllText(path, content);
     return path;
 }
+
+static Spinner StartSpinner(string label) => new(label);
