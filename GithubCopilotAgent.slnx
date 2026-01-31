@@ -1,5 +1,10 @@
 <Solution>
   <Folder Name="/src/">
-    <Project Path="src/GithubCopilotAgent.CLI/GithubCopilotAgent.CLI.csproj" />
+    <Project Path="src/Application/GithubCopilotAgent.Application.csproj" />
+    <Project Path="src/Infrastructure/GithubCopilotAgent.Infrastructure.csproj" />
+    <Project Path="src/Cli/GithubCopilotAgent.Cli.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/GithubCopilotAgent.Tests.csproj" />
   </Folder>
 </Solution>
