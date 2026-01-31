@@ -15,6 +15,7 @@ env:
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
   DOTNET_CLI_TELEMETRY_OPTOUT: 1
   PROJECT_PATH: src/Cli/GithubCopilotAgent.Cli.csproj
+  APP_NAME: GithubCopilotAgent.Cli
 
 jobs:
   build:
@@ -48,12 +49,22 @@ jobs:
             --self-contained true \
             /p:PublishSingleFile=true \
             /p:IncludeNativeLibrariesForSelfExtract=true \
+            /p:DebugType=None \
+            /p:DebugSymbols=false \
             -o "artifacts/${{ matrix.runtime }}"
 
       - name: Package ${{ matrix.runtime }}
         run: |
           mkdir -p artifacts/package
-          zip -j "artifacts/package/github-copilot-agent-${{ inputs.version }}-${{ matrix.runtime }}.zip" artifacts/${{ matrix.runtime }}/*
+          binary_path="artifacts/${{ matrix.runtime }}/$APP_NAME"
+          if [ "${{ matrix.runtime }}" = "win-x64" ]; then
+            binary_path="$binary_path.exe"
+          fi
+          if [ ! -f "$binary_path" ]; then
+            echo "Binary not found: $binary_path" >&2
+            exit 1
+          fi
+          zip -j "artifacts/package/github-copilot-agent-${{ inputs.version }}-${{ matrix.runtime }}.zip" "$binary_path"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -82,7 +93,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.version }}
-          name: "Release ${{ inputs.version }}"
+          name: ${{ inputs.version }}
           target_commitish: master
           generate_release_notes: true
           files: "*.zip"
