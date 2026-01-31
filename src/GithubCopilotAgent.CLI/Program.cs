@@ -123,10 +123,18 @@ static async Task<string> RunWorkflowAsync(Workflow workflow, string input)
 
     using var spinner = StartSpinner("Working");
     var buffer = new StringBuilder();
+    string? currentAgent = null;
 
     await foreach (var evt in run.WatchStreamAsync())
     {
         spinner.Ping();
+
+        var agentName = GetAgentName(evt);
+        if (!string.IsNullOrEmpty(agentName) && !string.Equals(agentName, currentAgent, StringComparison.Ordinal))
+        {
+            currentAgent = agentName;
+            Console.WriteLine($"\n→ {currentAgent} thinking...");
+        }
 
         switch (evt)
         {
@@ -142,10 +150,6 @@ static async Task<string> RunWorkflowAsync(Workflow workflow, string input)
 
             case WorkflowErrorEvent error:
                 Console.WriteLine($"[workflow error] {error}");
-                break;
-
-            default:
-                Console.WriteLine($"[event] {evt.GetType().Name}");
                 break;
         }
     }
@@ -173,3 +177,27 @@ static string SaveRun(string goal, string content)
 }
 
 static Spinner StartSpinner(string label) => new(label);
+
+static string? GetAgentName(object evt)
+{
+    var type = evt.GetType();
+    var prop = type.GetProperty("AgentName") ?? type.GetProperty("Name") ?? type.GetProperty("AgentId");
+    if (prop?.GetValue(evt) is string name && !string.IsNullOrWhiteSpace(name))
+    {
+        return name;
+    }
+
+    // Some events may carry an Agent on a Response property.
+    var responseProp = type.GetProperty("Response");
+    if (responseProp?.GetValue(evt) is { } response)
+    {
+        var innerType = response.GetType();
+        var innerProp = innerType.GetProperty("AgentName") ?? innerType.GetProperty("Name") ?? innerType.GetProperty("AgentId");
+        if (innerProp?.GetValue(response) is string innerName && !string.IsNullOrWhiteSpace(innerName))
+        {
+            return innerName;
+        }
+    }
+
+    return null;
+}
